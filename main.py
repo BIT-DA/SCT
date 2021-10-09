@@ -26,7 +26,7 @@ parser.add_argument('--target', type=str, default='amazon', help='Target domain'
                              'webcam_resnet', 'caltech_surf', 'caltech_decaf', 'caltech_resnet', 'dslr_surf',
                              'dslr_decaf', 'dslr_resnet', 'nustag', 'imagenet',
                              'spanish5', 'spanish10', 'spanish15', 'spanish20'])
-parser.add_argument('--cuda', type=str, default='5', help='Cuda index number')
+parser.add_argument('--cuda', type=str, default='0', help='Cuda index number')
 parser.add_argument('--nepoch', type=int, default=5000, help='Epoch amount')
 parser.add_argument('--nepoch_first', type=int, default=1000, help='Epoch amount')
 parser.add_argument('--partition', type=int, default=10, help='Number of partition')
@@ -137,8 +137,6 @@ def train(model, optimizer, configuration):
     duration_list, source_accuracy, labeled_target_accuracy, unlabeled_target_accuracy = [], [], [], []
 
     # training
-    # kmeans->聚类
-    # 类对齐
     for epoch in range(args.nepoch):
         # scheduler.step()
         if epoch == args.nepoch_first:
@@ -162,7 +160,7 @@ def train(model, optimizer, configuration):
             source_feature, source_label = source_feature.cuda(), source_label.cuda()
             l_target_feature, l_target_label = l_target_feature.cuda(), l_target_label.cuda()
             u_target_feature = u_target_feature.cuda()
-        # 初始pretrain模型测试
+        # init
         if epoch == 0:
             acc_src = tst(model, configuration, 'source')
             acc_labeled_tar = tst(model, configuration, 'labeled_target')
@@ -185,7 +183,7 @@ def train(model, optimizer, configuration):
 
         error_overall = 0.0
 
-        # 根据 source 获取伪标签
+        # get pseudo label
         u_target_output, u_target_pseudo_label, u_target_pseudo_label_all = get_prototype_label_source_2(
             source_learned_features=source_learned_feature,
             u_target_learned_features=u_target_learned_feature,
@@ -199,20 +197,20 @@ def train(model, optimizer, configuration):
         # target_label_all = torch.cat((l_target_label.cpu(), u_target_label), dim=0)
         target_pseudo_label = torch.cat((l_target_label, u_target_pseudo_label_all))
 
-        # target 类中心计算
+        # calculate target prototype
         target_refine_pseudo_label = target_pseudo_label
         target_cluster_center = compute_cluster_center(features=target_learned_feature_all,
                                                        labels=target_refine_pseudo_label,
                                                        class_num=configuration['class_number'])
 
-        # source 类中心计算
+        # calculate source prototype
         source_cluster_center = compute_cluster_center(features=source_learned_feature,
                                                        labels=source_label,
                                                        class_num=configuration['class_number'])
 
         source_one_center = torch.mean(source_learned_feature, dim=0)
         target_one_center = torch.mean(target_learned_feature_all, dim=0)
-        # 计算全局中心loss
+        # calculate DPA loss
         if args.mean_loss and epoch >= args.nepoch_first:
             mean_loss, source_one_center, target_one_center = cal_mean_loss(source_learned_feature,
                                                                             target_learned_feature_all)
@@ -220,7 +218,7 @@ def train(model, optimizer, configuration):
             if epoch % 10 == 0:
                 print('Use mean_loss: ', mean_loss * args.mean_loss)
 
-        # 计算source CrossEntropyLoss loss
+        # calculate source CrossEntropyLoss loss
         if args.combine_pred.find('Euclidean') != -1 or args.combine_pred.find('Cosine') != -1:
             source_output, _, _ = get_prototype_label_source_2(source_learned_features=source_learned_feature,
                                                                u_target_learned_features=source_learned_feature,
@@ -233,7 +231,7 @@ def train(model, optimizer, configuration):
             if epoch % 10 == 0:
                 print('Use source CE loss: ', classification_loss)
 
-        # 计算target CrossEntropyLoss loss
+        # calculate target CrossEntropyLoss loss
         if args.combine_pred.find('Euclidean') != -1 or args.combine_pred.find('Cosine') != -1:
             l_target_output, _, _ = get_prototype_label_source_2(source_learned_features=source_learned_feature,
                                                                  u_target_learned_features=l_target_learned_feature,
@@ -246,7 +244,7 @@ def train(model, optimizer, configuration):
             if epoch % 10 == 0:
                 print('Use l target loss: ', l_classification_loss)
 
-        # 计算每个类中心欧式距离的loss 和 角度夹角之间的loss
+        # # calculate DPA loss and SCT loss
         if (args.cos_loss or args.shift_loss) and (epoch >= args.nepoch_first or not pre_lr_str.strip() == '0'):
             shift_loss, cos_loss = cal_cos_loss(source_one_center, target_one_center,
                                                    source_cluster_center, target_cluster_center)
@@ -293,37 +291,37 @@ def train(model, optimizer, configuration):
 
 if __name__ == '__main__':
     result = 0.
-    for i in range(args.partition):
-        print(args)
-        print(os.path.basename(__file__))
-        pre_lr_str = args.pre_lr
-        # if not pre_lr_str.strip() == '0':
-        #     configuration = data_loader.get_configuration(args, is_train=True)
-        # else:
-        #     configuration = data_loader.get_configuration(args, is_train=False)
-        configuration = data_loader_sct.get_configuration(args)
 
-        model = Prototypical(configuration['d_source'], configuration['d_target'], args.d_common,
-                             configuration['class_number'], args.layer)
-        if torch.cuda.is_available():
-            model = model.cuda()
-        if args.optimizer == 'SGD':
-            optimizer = optim.SGD(model.parameters(), lr=args.lr)
-        elif args.optimizer == 'mSGD':
-            optimizer = optim.SGD(model.parameters(), lr=args.lr_first, momentum=0.9,
-                                  weight_decay=0.001, nesterov=True)
-            gamm = '%.4f'%(args.lr / args.lr_first)
-            print('lr gam', gamm)
-            # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[2000], gamma=gamm, last_epoch=-1)
-        elif args.optimizer == 'Adam':
-            optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.99))
+    print(args)
+    print(os.path.basename(__file__))
+    pre_lr_str = args.pre_lr
+    # if not pre_lr_str.strip() == '0':
+    #     configuration = data_loader.get_configuration(args, is_train=True)
+    # else:
+    #     configuration = data_loader.get_configuration(args, is_train=False)
+    configuration = data_loader_sct.get_configuration(args)
 
-        # a_surf->a_decaf ./save/300-epoch.pth
-        if not pre_lr_str.strip() == '0':
-            checkpoint = torch.load(
-                './ppa_save_spt_{}_{}/{}_best-epoch.pth'.format(args.source, args.target, args.pre_lr),
-                map_location='cuda:%s' % args.cuda)
-            model.load_state_dict(checkpoint['feature_extractor'])
-            print('load model............', args.source, args.target, args.pre_lr)
-        result += train(model, optimizer, configuration)
-    print('Avg acc:', str('%.4f' % (result / args.partition)).ljust(4))
+    model = Prototypical(configuration['d_source'], configuration['d_target'], args.d_common,
+                         configuration['class_number'], args.layer)
+    if torch.cuda.is_available():
+        model = model.cuda()
+    if args.optimizer == 'SGD':
+        optimizer = optim.SGD(model.parameters(), lr=args.lr)
+    elif args.optimizer == 'mSGD':
+        optimizer = optim.SGD(model.parameters(), lr=args.lr_first, momentum=0.9,
+                              weight_decay=0.001, nesterov=True)
+        gamm = '%.4f'%(args.lr / args.lr_first)
+        print('lr gam', gamm)
+        # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[2000], gamma=gamm, last_epoch=-1)
+    elif args.optimizer == 'Adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.99))
+
+    # a_surf->a_decaf ./save/300-epoch.pth
+    if not pre_lr_str.strip() == '0':
+        checkpoint = torch.load(
+            './ppa_save_spt_{}_{}/{}_best-epoch.pth'.format(args.source, args.target, args.pre_lr),
+            map_location='cuda:%s' % args.cuda)
+        model.load_state_dict(checkpoint['feature_extractor'])
+        print('load model............', args.source, args.target, args.pre_lr)
+    result += train(model, optimizer, configuration)
+
