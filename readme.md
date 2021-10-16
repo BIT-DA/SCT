@@ -25,6 +25,5 @@ If you have any problem about our code, feel free to contact
 - yingzhao@bit.edu.cn
 - shuangli@bit.edu.cn
 - zhangrui20@bit.edu.cn
-- binhuixie@bit.edu.cn
 
 or describe your problem in Issues.
